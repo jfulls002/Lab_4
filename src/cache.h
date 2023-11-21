@@ -3,10 +3,38 @@
 
 #include <stdint.h>
 #include "types.h"
+#define MAX_WAYS 16
+#define MAX_SETS 16
 
 ///////////////////////////////////////////////////////////////////////////////////
 /// Define the necessary data structures here (Look at Appendix A for more details)
 ///////////////////////////////////////////////////////////////////////////////////
+typedef struct CacheLine{
+    bool valid;
+    bool dirty;
+    int tag;
+    int lastAccess;
+    int freq;
+    int coreID;
+}CacheLine;
+typedef struct CacheSet{
+    CacheLine* line[MAX_WAYS];
+}CacheSet;
+typedef struct Cache{
+    CacheSet* set[MAX_SETS];
+    int ways;
+    int replacement;
+    int sets;
+    CacheLine* lastEvicted;
+    int stat_read_access;
+    int stat_write_access;
+    int stat_read_miss;
+    int stat_write_miss;
+    int stat_dirty_evicts;
+    int tagNumBits;
+    int indexNumBits;
+}Cache;
+
 
 
 //////////////////////////////////////////////////////////////////////////////////////
