@@ -40,6 +40,8 @@ uint64_t       SWP_CORE0_WAYS  = 0;
 
 uint64_t       NUM_CORES       = 1;
 
+uint64_t	   COHERENCE       = 0;
+
 bool 	    DRAM_PAGE_POLICY = 0;
 
 /***************************************************************************************
@@ -164,6 +166,7 @@ void die_usage(){
     printf("      -L2repl          <num>    Set replacement policy for L2 cache [0:LRU,1:LFU+MRU,2:SWP] (Default:0)\n");
     printf("      -SWP_core0ways   <num>    Set static quota for core_0 for SWP (Default:1)\n");
     printf("      -dram_policy     <num>    Set DRAM page policy [0:Open Page Policy, 1: Close Page Policy](Default:0)\n");
+	printf("	  -coherence	   Enable MSI Coherence protocol for the given memory system.\n");
     exit(0);
 }
 

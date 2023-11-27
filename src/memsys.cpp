@@ -56,6 +56,14 @@ Memsys* memsys_new(void){
 				sys->icache_coreid[i] = cache_new(ICACHE_SIZE, ICACHE_ASSOC, CACHE_LINESIZE, REPL_POLICY);
 			}
 			break;
+		case SIM_MODE_F:
+			sys->l2cache = cache_new(L2CACHE_SIZE, L2CACHE_ASSOC, CACHE_LINESIZE, L2CACHE_REPL);
+			sys->dram = dram_new();
+			for (uint i = 0; i < NUM_CORES; i++) {
+				sys->dcache_coreid[i] = cache_new(DCACHE_SIZE, DCACHE_ASSOC, CACHE_LINESIZE, REPL_POLICY);
+				sys->icache_coreid[i] = cache_new(ICACHE_SIZE, ICACHE_ASSOC, CACHE_LINESIZE, REPL_POLICY);
+			}
+			break;
 		default:
 			break;
 	}
@@ -179,6 +187,20 @@ void memsys_print_stats(Memsys* sys){
 			cache_print_stats(sys->l2cache, header);
 			dram_print_stats(sys->dram);
 			break;
+		case SIM_MODE_F:
+			assert(NUM_CORES==2); //Hardcoded
+			sprintf(header, "ICACHE_0");
+			cache_print_stats(sys->icache_coreid[0], header);
+			sprintf(header, "DCACHE_0");
+			cache_print_stats_coherence(sys->dcache_coreid[0], header);
+			sprintf(header, "ICACHE_1");
+			cache_print_stats(sys->icache_coreid[1], header);
+			sprintf(header, "DCACHE_1");
+			cache_print_stats_coherence(sys->dcache_coreid[1], header);
+			sprintf(header, "L2CACHE");
+			cache_print_stats(sys->l2cache, header);
+			dram_print_stats(sys->dram);
+			break;
 		default:
 			break;
 	}
@@ -291,6 +313,33 @@ uint64_t memsys_convert_vpn_to_pfn(Memsys *sys, uint64_t vpn, uint32_t core_id){
 
 }
 
+////////////////////////////////////////////////////////////////////////
+// For LOAD and STORE Type instructions, we use the following function.
+// Note: We are artificially creating the coherence traffic to simulate
+// the effect of coherence protocol in the given program mix. Please do
+// not modify or change the current mapping. 
+///////////////////////////////////////////////////////////////////////
+
+/////////////////////////////////////////////////////////////////////
+// DO NOT MODIFY THE CODE OF THIS FUNCTION
+/////////////////////////////////////////////////////////////////////
+
+uint64_t memsys_convert_vpn_to_pfn_modeF (Memsys *sys, Addr v_lineaddr, uint32_t core_id)
+{
+	Addr p_lineaddr = 0;
+
+	uint64_t set_indexing = (PAGE_SIZE/64);
+	uint64_t base = v_lineaddr % set_indexing;
+	uint64_t vpn = (v_lineaddr) / (PAGE_SIZE/CACHE_LINESIZE);
+	uint64_t tail = vpn & 0xFFF;
+	uint64_t head = vpn >> 12;
+	uint64_t pfn = tail + ((head << 6));
+	p_lineaddr = pfn*(PAGE_SIZE/CACHE_LINESIZE) + base;
+	assert(NUM_CORES==2);
+
+	return p_lineaddr;
+}
+
 uint64_t memsys_access_modeDE(Memsys* sys, Addr v_lineaddr, Access_Type type, uint32_t core_id) {
 
 	uint64_t delay=0;
@@ -341,6 +390,44 @@ uint64_t memsys_L2_access_multicore(Memsys* sys, Addr lineaddr, bool is_writebac
 			dram_access_mode_CDE(sys->dram,sys->l2cache->lastEvicted->tag,sys->l2cache->lastEvicted->dirty);
 			sys->l2cache->lastEvicted->valid=0;
 		}
+	}
+	return delay;
+}
+
+uint64_t memsys_access_modeF (Memsys *sys, Addr v_lineaddr, Access_Type type, uint32_t core_id)
+{
+	uint64_t delay = 0;
+
+	Addr p_lineaddr = 0;
+
+	// ICACHE does not follow coherence. For the address, we use the function memsys_convert_vpn_to_pfn()
+	// Convert the lineaddr from virtual (v) to physical (p) using the
+	// function memsys_convert_vpn_to_pfn(). Page size is defined to be 4 KB.
+	// NOTE: VPN_to_PFN operates at page granularity and returns page addr.
+
+	// Perform the ICACHE Access using the functions cache_access/ cache_install
+	if (type == ACCESS_TYPE_IFETCH)
+	{
+
+		assert(p_lineaddr!=memsys_convert_vpn_to_pfn_modeF(sys,v_lineaddr,core_id));
+
+	}
+	// For other types, we will use the function memsys_convert_vpn_to_pfn_modeF().
+	// This function takes in the v_lineaddr and returns the p_lineaddr for use.
+	else { 
+		
+		// Convert the virtual lineaddr to physical lineaddr using memsys_convert_vpn_to_pfn_modeF()
+
+		// Get the Coherence state of the cache line from the current core and the other core.
+		// Set the state for the remote core based on the read/write of the current core
+
+		// Based on the remote core's coherence state, perform the read/write to the current core.
+			// In case of a hit, update the delay based on the initial state of the line in the current core.
+			// In case of a miss, access the L2 Cache + install the new line + if needed, perform the writeback.
+
+		// Note that the remote core's coherence state can impact the access of the cache line.
+		// In case of state upgrades and invalidation/PutX, we need to modify the delay required.
+
 	}
 	return delay;
 }
