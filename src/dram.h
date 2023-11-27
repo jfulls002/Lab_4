@@ -7,21 +7,28 @@
 #include <stdint.h>
 
 #include "types.h"
-#define MAX_ROWS 256
 
 //////////////////////////////////////////////////////////////////
 // Define the Data structures here with the correct field (Refer to Appendix B for more details)
 //////////////////////////////////////////////////////////////////
 typedef struct RowBuffer{
     bool valid;
-    int rowID;
+    uint64_t rowID;
 }RowBuffer;
 typedef struct DRAM{
-    RowBuffer* rows[MAX_ROWS];
-    uint64_t stat_read_access;
-    uint64_t stat_write_access;
-    uint64_t stat_read_delay;
-    uint64_t stat_write_delay;
+    int banks;
+    int maxRows;
+    int numCols;
+    RowBuffer* rows;
+    unsigned long long stat_read_access;
+    unsigned long long stat_write_access;
+    unsigned long long stat_read_delay;
+    unsigned long long stat_write_delay;
+    bool pagePolicy;
+    int RAS;
+    int CAS;
+    int PRE;
+    int BUS;
 }DRAM;
 
 

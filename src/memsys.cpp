@@ -86,6 +86,9 @@ uint64_t memsys_access(Memsys* sys, Addr addr, Access_Type type, uint32_t core_i
 		case SIM_MODE_E:
 			delay = memsys_access_modeDE(sys,lineaddr,type, core_id);
 			break;
+		case SIM_MODE_F:
+			delay = memsys_access_modeF(sys,lineaddr,type,core_id);
+			break;
 		default:
 			break;
 	}
@@ -209,26 +212,59 @@ uint64_t memsys_access_modeA(Memsys* sys, Addr lineaddr, Access_Type type, uint3
 
 uint64_t memsys_access_modeBC(Memsys* sys, Addr lineaddr, Access_Type type, uint32_t core_id){
 
-	uint64_t delay;
+	uint64_t delay=0;
 
 	// Perform the ICACHE/ DCACHE access
-	
-
+	bool needs_dcache_access = !(type == ACCESS_TYPE_IFETCH);
+	bool is_write = (type == ACCESS_TYPE_STORE);
+	if (needs_dcache_access) {
+		delay+=DCACHE_HIT_LATENCY;
+		if(!cache_access(sys->dcache,lineaddr,is_write,core_id)){
+			delay+=memsys_L2_access(sys,lineaddr,0,core_id);
+			cache_install(sys->dcache,lineaddr,is_write,core_id);
+			if(sys->dcache->lastEvicted->valid&&sys->dcache->lastEvicted->dirty){
+				memsys_L2_access(sys,sys->dcache->lastEvicted->tag,sys->dcache->lastEvicted->dirty,sys->dcache->lastEvicted->coreID);
+				sys->dcache->lastEvicted->valid=0;
+			}
+		}
+	}else{
+		delay+=ICACHE_HIT_LATENCY;
+		if(!cache_access(sys->icache,lineaddr,is_write,core_id)){
+			delay+=memsys_L2_access(sys,lineaddr,0,core_id);
+			cache_install(sys->icache,lineaddr,is_write,core_id);
+			if(sys->icache->lastEvicted->valid&&sys->icache->lastEvicted->dirty){
+				memsys_L2_access(sys,sys->icache->lastEvicted->tag,sys->icache->lastEvicted->dirty,sys->icache->lastEvicted->coreID);
+				sys->icache->lastEvicted->valid=0;
+			}
+		}
+	}
 	// On DCACHE miss, access the L2 Cache + install the new line + if needed, perform writeback
-
-
 	return delay;
 }
 
 uint64_t memsys_L2_access(Memsys* sys, Addr lineaddr, bool is_writeback, uint32_t core_id){
 
 	uint64_t delay = L2CACHE_HIT_LATENCY;
-
 	// Perform the L2 access
-	
-
+	if(!cache_access(sys->l2cache,lineaddr,is_writeback,core_id)){
 	// On L2 miss, access DRAM + install the new line + if needed, perform writeback
-
+		if(!is_writeback){
+			if(SIM_MODE==SIM_MODE_B){
+				delay+=dram_access(sys->dram,lineaddr,is_writeback);
+			}else{
+				delay+=dram_access_mode_CDE(sys->dram,lineaddr,is_writeback);
+			}
+		}
+		cache_install(sys->l2cache,lineaddr,is_writeback,core_id);
+		if(sys->l2cache->lastEvicted->valid&&sys->l2cache->lastEvicted->dirty){
+			if(SIM_MODE==SIM_MODE_B){
+				dram_access(sys->dram,sys->l2cache->lastEvicted->tag,sys->l2cache->lastEvicted->dirty);
+			}else{
+				dram_access_mode_CDE(sys->dram,sys->l2cache->lastEvicted->tag,sys->l2cache->lastEvicted->dirty);
+			}
+			sys->l2cache->lastEvicted->valid=0;
+		}
+	}
 	return delay;
 }
 
@@ -257,12 +293,37 @@ uint64_t memsys_convert_vpn_to_pfn(Memsys *sys, uint64_t vpn, uint32_t core_id){
 
 uint64_t memsys_access_modeDE(Memsys* sys, Addr v_lineaddr, Access_Type type, uint32_t core_id) {
 
-	uint64_t delay;
-
+	uint64_t delay=0;
 	// Convert the lineaddr from virtual (v) to physical (p) using the
 	// function memsys_convert_vpn_to_pfn(). Page size is defined to be 4 KB.
 	// NOTE: VPN_to_PFN operates at page granularity and returns page addr.
-
+	uint64_t offset=v_lineaddr%64;
+	uint64_t vpn=v_lineaddr>>6;//**
+	uint64_t pageaddr=memsys_convert_vpn_to_pfn(sys,vpn,core_id);
+	Addr lineaddr=(pageaddr<<6)+offset;//**
+	bool needs_dcache_access = !(type == ACCESS_TYPE_IFETCH);
+	bool is_write = (type == ACCESS_TYPE_STORE);
+	if (needs_dcache_access) {
+		delay+=DCACHE_HIT_LATENCY;
+		if(!cache_access(sys->dcache_coreid[core_id],lineaddr,is_write,core_id)){
+			delay+=memsys_L2_access_multicore(sys,lineaddr,0,core_id);
+			cache_install(sys->dcache_coreid[core_id],lineaddr,is_write,core_id);
+			if(sys->dcache_coreid[core_id]->lastEvicted->valid&&sys->dcache_coreid[core_id]->lastEvicted->dirty){
+				memsys_L2_access_multicore(sys,sys->dcache_coreid[core_id]->lastEvicted->tag,sys->dcache_coreid[core_id]->lastEvicted->dirty,sys->dcache_coreid[core_id]->lastEvicted->coreID);
+				sys->dcache_coreid[core_id]->lastEvicted->valid=0;
+			}
+		}
+	}else{
+		delay+=ICACHE_HIT_LATENCY;
+		if(!cache_access(sys->icache_coreid[core_id],lineaddr,is_write,core_id)){
+			delay+=memsys_L2_access_multicore(sys,lineaddr,0,core_id);
+			cache_install(sys->icache_coreid[core_id],lineaddr,is_write,core_id);
+			if(sys->icache_coreid[core_id]->lastEvicted->valid&&sys->icache_coreid[core_id]->lastEvicted->dirty){
+				memsys_L2_access_multicore(sys,sys->icache_coreid[core_id]->lastEvicted->tag,sys->icache_coreid[core_id]->lastEvicted->dirty,sys->icache_coreid[core_id]->lastEvicted->coreID);
+				sys->icache_coreid[core_id]->lastEvicted->valid=0;
+			}
+		}
+	}
 
 	return delay;
 }
@@ -270,12 +331,17 @@ uint64_t memsys_access_modeDE(Memsys* sys, Addr v_lineaddr, Access_Type type, ui
 
 uint64_t memsys_L2_access_multicore(Memsys* sys, Addr lineaddr, bool is_writeback, uint32_t core_id) {
 
-	uint64_t delay;
-
+	uint64_t delay=L2CACHE_HIT_LATENCY;
 	// If there is a miss in the L1 Cache, access the L2Cache for the specific lineaddr.
-
+	if(!cache_access(sys->l2cache,lineaddr,is_writeback,core_id)){
 	// If the L2Cache does not have the cache line, access the memory + install the new line + if needed, perform the writeback.
-
+		if(!is_writeback)delay+=dram_access_mode_CDE(sys->dram,lineaddr,is_writeback);
+		cache_install(sys->l2cache,lineaddr,is_writeback,core_id);
+		if(sys->l2cache->lastEvicted->valid&&sys->l2cache->lastEvicted->dirty){
+			dram_access_mode_CDE(sys->dram,sys->l2cache->lastEvicted->tag,sys->l2cache->lastEvicted->dirty);
+			sys->l2cache->lastEvicted->valid=0;
+		}
+	}
 	return delay;
 }
 
