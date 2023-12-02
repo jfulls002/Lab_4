@@ -324,8 +324,7 @@ uint64_t memsys_convert_vpn_to_pfn(Memsys *sys, uint64_t vpn, uint32_t core_id){
 // DO NOT MODIFY THE CODE OF THIS FUNCTION
 /////////////////////////////////////////////////////////////////////
 
-uint64_t memsys_convert_vpn_to_pfn_modeF (Memsys *sys, Addr v_lineaddr, uint32_t core_id)
-{
+uint64_t memsys_convert_vpn_to_pfn_modeF (Memsys *sys, Addr v_lineaddr, uint32_t core_id){
 	Addr p_lineaddr = 0;
 
 	uint64_t set_indexing = (PAGE_SIZE/64);
@@ -347,9 +346,9 @@ uint64_t memsys_access_modeDE(Memsys* sys, Addr v_lineaddr, Access_Type type, ui
 	// function memsys_convert_vpn_to_pfn(). Page size is defined to be 4 KB.
 	// NOTE: VPN_to_PFN operates at page granularity and returns page addr.
 	uint64_t offset=v_lineaddr%64;
-	uint64_t vpn=v_lineaddr>>6;//**
+	uint64_t vpn=v_lineaddr>>6;
 	uint64_t pageaddr=memsys_convert_vpn_to_pfn(sys,vpn,core_id);
-	Addr lineaddr=(pageaddr<<6)+offset;//**
+	Addr lineaddr=(pageaddr<<6)+offset;
 	bool needs_dcache_access = !(type == ACCESS_TYPE_IFETCH);
 	bool is_write = (type == ACCESS_TYPE_STORE);
 	if (needs_dcache_access) {
@@ -399,6 +398,7 @@ uint64_t memsys_access_modeF (Memsys *sys, Addr v_lineaddr, Access_Type type, ui
 	uint64_t delay = 0;
 
 	Addr p_lineaddr = 0;
+	bool is_write = (type == ACCESS_TYPE_STORE);
 
 	// ICACHE does not follow coherence. For the address, we use the function memsys_convert_vpn_to_pfn()
 	// Convert the lineaddr from virtual (v) to physical (p) using the
@@ -406,21 +406,41 @@ uint64_t memsys_access_modeF (Memsys *sys, Addr v_lineaddr, Access_Type type, ui
 	// NOTE: VPN_to_PFN operates at page granularity and returns page addr.
 
 	// Perform the ICACHE Access using the functions cache_access/ cache_install
-	if (type == ACCESS_TYPE_IFETCH)
-	{
-
+	if (type == ACCESS_TYPE_IFETCH){
+		uint64_t offset=v_lineaddr%64;
+		uint64_t vpn=v_lineaddr>>6;
+		uint64_t pageaddr=memsys_convert_vpn_to_pfn(sys,vpn,core_id);
+		p_lineaddr=(pageaddr<<6)+offset;
 		assert(p_lineaddr!=memsys_convert_vpn_to_pfn_modeF(sys,v_lineaddr,core_id));
-
+		delay+=ICACHE_HIT_LATENCY;
+		if(!cache_access(sys->icache_coreid[core_id],p_lineaddr,is_write,core_id)){
+			delay+=memsys_L2_access_multicore(sys,p_lineaddr,0,core_id);
+			cache_install(sys->icache_coreid[core_id],p_lineaddr,is_write,core_id);
+			if(sys->icache_coreid[core_id]->lastEvicted->valid&&sys->icache_coreid[core_id]->lastEvicted->dirty){
+				memsys_L2_access_multicore(sys,sys->icache_coreid[core_id]->lastEvicted->tag,sys->icache_coreid[core_id]->lastEvicted->dirty,sys->icache_coreid[core_id]->lastEvicted->coreID);
+				sys->icache_coreid[core_id]->lastEvicted->valid=0;
+			}
+		}
 	}
 	// For other types, we will use the function memsys_convert_vpn_to_pfn_modeF().
 	// This function takes in the v_lineaddr and returns the p_lineaddr for use.
 	else { 
 		
 		// Convert the virtual lineaddr to physical lineaddr using memsys_convert_vpn_to_pfn_modeF()
-
+		p_lineaddr=memsys_convert_vpn_to_pfn_modeF(sys,v_lineaddr,core_id);
 		// Get the Coherence state of the cache line from the current core and the other core.
-		// Set the state for the remote core based on the read/write of the current core
-
+		Coherence_State localCoherence=get_Cacheline_state(sys->dcache_coreid[core_id],p_lineaddr);
+		Coherence_State remoteCoherence=get_Cacheline_state(sys->dcache_coreid[(~core_id)%2],p_lineaddr);
+		if(remoteCoherence!=INVALID){
+			CacheSet* remoteSet=&(sys->dcache_coreid[(~core_id)%2]->set[p_lineaddr%(sys->dcache_coreid[(~core_id)%2]->numets)]);
+			for(int i=0;i<sys->dcache_coreid[(~core_id)%2]->ways;i++){
+				if(remoteSet->line[i]->tag==p_lineaddr){
+					bool remoteSnooped=remoteSet->line[i]->dirty;
+				}
+			}
+			// Set the state for the remote core based on the read/write of the current core
+			set_Cacheline_state(sys->dcache_coreid[(~core_id)%2],p_lineaddr,is_write);
+		}
 		// Based on the remote core's coherence state, perform the read/write to the current core.
 			// In case of a hit, update the delay based on the initial state of the line in the current core.
 			// In case of a miss, access the L2 Cache + install the new line + if needed, perform the writeback.

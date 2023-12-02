@@ -20,12 +20,13 @@ typedef struct CacheLine{
     uint32_t lastAccess;
     uint32_t freq;
     uint32_t coreID;
+    Coherence_State coherence;
 }CacheLine;
 typedef struct CacheSet{
     CacheLine* line[MAX_WAYS];
 }CacheSet;
 typedef struct Cache{
-    uint64_t sets;
+    uint64_t numSets;
     CacheSet* set;
     uint64_t ways;
     uint64_t replacement;

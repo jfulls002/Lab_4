@@ -75,15 +75,15 @@ Cache* cache_new(uint64_t size, uint64_t assoc, uint64_t linesize, uint64_t repl
 	Cache* c=(Cache*)calloc(1,sizeof(Cache));
 	c->tagNumBits=linesize;
 	c->ways=assoc;
-	c->sets=size/(assoc*linesize);
+	c->numSets=size/(assoc*linesize);
 	int i;
 	int j;
 	CacheLine* evict=(CacheLine*)malloc(sizeof(CacheLine));
 	evict->dirty=0;
 	evict->valid=0;
 	c->lastEvicted=evict;
-	CacheSet* s=(CacheSet*)calloc(c->sets,sizeof(CacheSet));
-	for(i=0;i<(int)c->sets;i++){
+	CacheSet* s=(CacheSet*)calloc(c->numSets,sizeof(CacheSet));
+	for(i=0;i<(int)c->numSets;i++){
 		for(j=0;j<(int)c->ways;j++){
 			CacheLine* l=(CacheLine*)malloc(sizeof(CacheLine));
 			l->dirty=0;
@@ -92,6 +92,7 @@ Cache* cache_new(uint64_t size, uint64_t assoc, uint64_t linesize, uint64_t repl
 			l->tag=0;
 			l->valid=0;
 			l->coreID=0;
+			l->coherence=INVALID;
 			s[i].line[j]=l;
 		}
 	}
@@ -124,7 +125,7 @@ Cache* cache_new(uint64_t size, uint64_t assoc, uint64_t linesize, uint64_t repl
 
 bool cache_access(Cache* c, Addr lineaddr, uint32_t is_write, uint32_t core_id){
 	int i;
-	int index=lineaddr % c->sets;
+	int index=lineaddr % c->numSets;
 	CacheSet* set=&c->set[index];
 	bool toReturn=0;
 	int numWays=(int)c->ways;
@@ -164,7 +165,7 @@ bool cache_access(Cache* c, Addr lineaddr, uint32_t is_write, uint32_t core_id){
 /////////////////////////////////////////////////////////////////////////////////////
 
 void cache_install(Cache* c, Addr lineaddr, uint32_t is_write, uint32_t core_id){
-	int index=lineaddr%c->sets;
+	int index=lineaddr%c->numSets;
 	uint32_t toEvict=cache_find_victim(c,index,core_id);
 	c->lastEvicted->coreID=c->set[index].line[toEvict]->coreID;
 	c->lastEvicted->dirty=c->set[index].line[toEvict]->dirty;
@@ -263,9 +264,40 @@ uint32_t cache_find_victim(Cache *c, uint32_t set_index, uint32_t core_id){
 /////////////////////////////////////////////////////////////////////////////////////
 
 
-bool cache_access_coherence (Cache *c, Addr lineaddr, uint32_t is_write, uint32_t core_id)
-{
-	
+bool cache_access_coherence (Cache *c, Addr lineaddr, uint32_t is_write, uint32_t core_id){
+	int i;
+	int index=lineaddr % c->numSets;
+	CacheSet* set=&c->set[index];
+	bool toReturn=0;
+	int numWays=(int)c->ways;
+	for(i=0;i<numWays;i++){
+		if(set->line[i]->valid){
+			if(set->line[i]->tag==lineaddr){
+				toReturn=1;
+				if(set->line[i]->freq==63){
+					set->line[i]->freq=63;
+				}else{
+					set->line[i]->freq++;
+				}	
+				set->line[i]->lastAccess=cycle;
+				if(is_write){
+					set->line[i]->dirty=1;
+					c->stat_write_access++;
+				}else{
+					c->stat_read_access++;
+				}
+			}
+		}
+	}
+	if(!toReturn&&!is_write){
+		c->stat_read_miss++;
+		c->stat_read_access++;
+	}
+	if(!toReturn&&is_write){
+		c->stat_write_miss++;
+		c->stat_write_access++;
+	}
+	return toReturn;
 }
 
 
@@ -276,18 +308,48 @@ bool cache_access_coherence (Cache *c, Addr lineaddr, uint32_t is_write, uint32_
 /////////////////////////////////////////////////////////////////////////////////////
 
 void cache_install_coherence (Cache *c, Addr lineaddr, uint32_t is_write, uint32_t core_id) { //Install a new line into the cache with a coherence state.
-
-	
+	int index=lineaddr%c->numSets;
+	uint32_t toEvict=cache_find_victim(c,index,core_id);
+	c->lastEvicted->coreID=c->set[index].line[toEvict]->coreID;
+	c->lastEvicted->dirty=c->set[index].line[toEvict]->dirty;
+	c->lastEvicted->freq=c->set[index].line[toEvict]->freq;
+	c->lastEvicted->lastAccess=c->set[index].line[toEvict]->lastAccess;
+	c->lastEvicted->tag=c->set[index].line[toEvict]->tag;
+	c->lastEvicted->valid=c->set[index].line[toEvict]->valid;
+	c->lastEvicted->coherence=c->set[index].line[toEvict]->coherence;
+	if(c->lastEvicted->dirty&&c->lastEvicted->valid)c->stat_dirty_evicts++;
+	c->set[index].line[toEvict]->coreID=core_id;
+	c->set[index].line[toEvict]->dirty=is_write;
+	c->set[index].line[toEvict]->freq=1;
+	c->set[index].line[toEvict]->lastAccess=cycle;
+	c->set[index].line[toEvict]->valid=1;
+	c->set[index].line[toEvict]->tag=lineaddr;
+	if(is_write){
+		c->stat_PutX_msg++;
+		c->set[index].line[toEvict]->coherence=MODIFIED;
+	}else{
+		c->set[index].line[toEvict]->coherence=SHARED;
+	}
 }
 
 //////////////////////////////////////////////////////////////////////////////////////
 // Obtain the Coherence state for the given cacheline.
 /////////////////////////////////////////////////////////////////////////////////////
-Coherence_State get_Cacheline_state (Cache* c, Addr lineaddr)
-{
+Coherence_State get_Cacheline_state (Cache* c, Addr lineaddr){
 	// If a line is present, the saved coherence state is returned
-
+	CacheSet* set=&(c->set[lineaddr%c->numSets]);
+	for(int i=0;i<(int)c->ways;i++){
+		if(set->line[i]->tag==lineaddr){
+			if(set->line[i]->coherence==SHARED){
+				c->stat_GetS_msg++;
+			}else if(set->line[i]->coherence==MODIFIED){
+				c->stat_GetX_msg++;
+			}
+			return set->line[i]->coherence;
+		}
+	}
 	// Else, return INVALID.
+	return INVALID;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////
@@ -298,6 +360,22 @@ Coherence_State get_Cacheline_state (Cache* c, Addr lineaddr)
 // read or write from the remote core and change states accordingly.
 /////////////////////////////////////////////////////////////////////////////////////////////
 void set_Cacheline_state (Cache* c, Addr lineaddr, bool snooped_action) {
+	CacheSet* set=&(c->set[lineaddr%c->numSets]);
+	CacheLine* line;
+	for(int i=0;i<(int)c->ways;i++){
+		if(set->line[i]->tag==lineaddr){
+			line=set->line[i];
+		}	
+	}
+	Coherence_State currCoherence=line->coherence;
+	if(snooped_action){
+		line->coherence=
+	}
+	if(currCoherence==SHARED){
 
+	}else if(currCoherence==MODIFIED){
 
+	}else{
+
+	}
 }
